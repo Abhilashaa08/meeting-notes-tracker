@@ -1,0 +1,270 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <title>Meeting Notes Recorder (Free)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 24px; }
+        textarea { width: 100%; min-height: 180px; }
+        button { padding: 8px 14px; margin-right: 8px; }
+        pre { background:#f6f8fa; padding:12px; overflow:auto; }
+    </style>
+</head>
+<body>
+<h2>Meeting Notes Recorder (Free)</h2>
+<p>Click <b>Start</b>, speak, then <b>Stop</b>. Review transcript and click <b>Analyze</b>.</p>
+
+<div>
+    <button id="start">Start</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="analyze" disabled>Analyze</button>
+</div>
+
+<h3>Transcript</h3>
+<textarea id="transcript" placeholder="Transcript will appear here..."></textarea>
+
+<h3>Analysis</h3>
+<pre id="output">{"summary":"", "decisions":[], "actionItems":[]}</pre>
+<div style="margin-top:12px;">
+    <input id="title" placeholder="Meeting title" style="padding:6px; width: 240px;">
+    <input id="attendees" placeholder="Attendees (comma-separated)" style="padding:6px; width: 280px;">
+    <button id="save">Save Meeting</button>
+    <button id="history">View History</button>
+</div>
+
+<h3>Saved Meetings</h3>
+<pre id="meetingsList">[]</pre>
+
+<script>
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const analyzeBtn = document.getElementById('analyze');
+    const transcriptEl = document.getElementById('transcript');
+    const outputEl = document.getElementById('output');
+
+    // Add a simple toggle in the UI
+    (function addToggle(){
+        const label = document.createElement('label');
+        label.style.marginLeft = '8px';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.id = 'autoPunct'; cb.checked = true;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(' Auto punctuation'));
+        document.querySelector('div').appendChild(label);
+    })();
+
+    let rec;
+    let finalTranscript = "";
+
+    function getRecognition() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { alert("Web Speech API not supported. Use Chrome desktop."); return null; }
+        const r = new SR();
+        r.lang = 'en-US';
+        r.continuous = true;
+        r.interimResults = true;
+        return r;
+    }
+
+    startBtn.onclick = () => {
+        rec = getRecognition();
+        if (!rec) return;
+
+        finalTranscript = "";
+        transcriptEl.value = "";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        analyzeBtn.disabled = true;
+
+        rec.onresult = (e) => {
+            let interim = "";
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+                const res = e.results[i][0].transcript;
+                if (e.results[i].isFinal) {
+                    finalTranscript += (finalTranscript && !finalTranscript.endsWith(" ") ? " " : "") + res.trim();
+                } else {
+                    interim += " " + res;
+                }
+            }
+            transcriptEl.value = (finalTranscript + " " + interim).trim();
+        };
+
+        rec.onerror = (e) => console.log("Speech error:", e.error);
+        rec.onend = () => {
+            // finalize text and optionally auto-punctuate
+            const auto = document.getElementById('autoPunct').checked;
+            let text = transcriptEl.value.trim();
+            if (auto && text) text = smartFormat(text);
+            transcriptEl.value = text;
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            analyzeBtn.disabled = transcriptEl.value.trim().length === 0;
+        };
+
+        rec.start();
+    };
+
+    stopBtn.onclick = () => {
+        if (rec) rec.stop();
+    };
+
+    analyzeBtn.onclick = async () => {
+        const auto = document.getElementById('autoPunct').checked;
+        let transcript = transcriptEl.value.trim();
+        if (auto && transcript) transcript = smartFormat(transcript);
+
+        if (!transcript) { alert("Transcript is empty"); return; }
+        const res = await fetch("/analyze", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ transcript })
+        });
+        const json = await res.json();
+        outputEl.textContent = JSON.stringify(json, null, 2);
+    };
+
+    // ---------- Smart Punctuation & Formatting ----------
+    function smartFormat(text) {
+        let t = text;
+
+        // Normalize spaces
+        t = t.replace(/\s+/g, ' ').trim();
+
+        // Common contractions (simple map)
+        const contractions = [
+            [/(\b)i am\b/gi, "I'm"],
+            [/(\b)i have\b/gi, "I've"],
+            [/(\b)i will\b/gi, "I'll"],
+            [/(\b)i would\b/gi, "I'd"],
+            [/\bdo not\b/gi, "don't"],
+            [/\bdoes not\b/gi, "doesn't"],
+            [/\bdid not\b/gi, "didn't"],
+            [/\bcan not\b/gi, "cannot"],
+            [/\bcan’t\b/gi, "can't"],
+            [/\bwill not\b/gi, "won't"],
+            [/\bare not\b/gi, "aren't"],
+            [/\bis not\b/gi, "isn't"],
+            [/\bare we\b/gi, "are we"], // keep
+            [/\bwe are\b/gi, "we're"],
+            [/\bwe have\b/gi, "we've"],
+            [/\bwe will\b/gi, "we'll"],
+            [/\bthey are\b/gi, "they're"],
+            [/\bthere is\b/gi, "there's"],
+            [/\bit is\b/gi, "it's"]
+        ];
+        contractions.forEach(([re, rep]) => t = t.replace(re, rep));
+
+        // Capitalize standalone I (not in contractions already replaced)
+        t = t.replace(/\b(i)\b/g, 'I');
+
+        // Split into rough sentences if no punctuation (heuristic)
+        // Look for triggers like "then", "so", "and", "but", "because", "also" after long runs
+        t = splitLongRuns(t);
+
+        // Discourse markers → commas
+        const leadIns = [
+            'however','therefore','moreover','furthermore','nevertheless',
+            'for example','for instance','in addition','as a result','in summary','in short'
+        ];
+        leadIns.forEach(p => {
+            const re = new RegExp(`(^|[.!?]\\s+)(${escapeReg(p)})\\b`, 'gi');
+            t = t.replace(re, (m, pre, word) => `${pre}${capitalize(word)},`);
+        });
+
+        // Add colon after common introducers
+        const introColon = ['as follows','the following','agenda is','action items are','key points are'];
+        introColon.forEach(p => {
+            const re = new RegExp(`\\b${escapeReg(p)}\\b:?\\s*`, 'gi');
+            t = t.replace(re, (m) => m.replace(/:?$/, ': '));
+        });
+
+        // Ensure space after punctuation, collapse duplicates
+        t = t.replace(/\s*([,;:!?])\s*/g, '$1 ');
+        t = t.replace(/\s*\.\s*/g, '. ');
+        t = t.replace(/([,.!?;:]){2,}/g, '$1 ');
+
+        // Capitalize sentence starts
+        t = t.replace(/(^|[.!?]\s+)([a-z])/g, (m, pre, c) => pre + c.toUpperCase());
+
+        // Ensure sentences end with proper mark
+        t = t.replace(/\s*$/,'');
+        if (!/[.?!]$/.test(t)) t += '.';
+
+        // Clean double spaces
+        t = t.replace(/\s{2,}/g, ' ').trim();
+        return t;
+    }
+
+    function splitLongRuns(t) {
+        // If no end punctuation for a long run, insert periods at ~25+ words or before “and/but/so/then/because” heuristics
+        const words = t.split(' ');
+        if (words.length < 25 && /[.?!]/.test(t)) return t;
+
+        // Insert a period before coordinating conjunctions when run is long
+        t = t.replace(/\b(and|but|so|then|because)\b/gi, (m) => {
+            return '. ' + m[0].toUpperCase() + m.slice(1);
+        });
+
+        // If still no punctuation and very long, force a period approx every 25 words
+        if (!/[.?!]/.test(t) && words.length >= 25) {
+            let out = [];
+            for (let i = 0; i < words.length; i++) {
+                out.push(words[i]);
+                if ((i+1) % 25 === 0) out.push('.');
+            }
+            t = out.join(' ');
+        }
+        return t;
+    }
+
+    function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+    function escapeReg(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+    const saveBtn = document.getElementById('save');
+    const historyBtn = document.getElementById('history');
+    const titleEl = document.getElementById('title');
+    const attendeesEl = document.getElementById('attendees');
+    const listEl = document.getElementById('meetingsList');
+
+    saveBtn.onclick = async () => {
+        const title = titleEl.value || "Untitled Meeting";
+        const attendees = attendeesEl.value || "";
+        const transcript = document.getElementById('transcript').value.trim();
+        if (!transcript) { alert("Transcript is empty"); return; }
+
+        // If you want to ensure best punctuation before saving:
+        const auto = document.getElementById('autoPunct')?.checked ?? true;
+        const text = auto ? smartFormat(transcript) : transcript;
+
+        const res = await fetch('/meetings', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/json' },
+            body: JSON.stringify({
+                title,
+                attendees,
+                transcript: text
+                // occurredAt: new Date().toISOString() // optional explicit timestamp
+            })
+        });
+        const json = await res.json();
+        if (res.ok) {
+            alert('Saved meeting #' + json.id);
+            await loadHistory();
+        } else {
+            alert('Save error: ' + JSON.stringify(json));
+        }
+    };
+
+    historyBtn.onclick = loadHistory;
+
+    async function loadHistory() {
+        const res = await fetch('/meetings');
+        const json = await res.json();
+        listEl.textContent = JSON.stringify(json, null, 2);
+    }
+</script>
+
+</body>
+</html>

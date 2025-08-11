@@ -1,0 +1,51 @@
+# Maven target directory
+target/
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# Maven wrapper JAR
+.mvn/wrapper/maven-wrapper.jar
+
+### IDE ###
+# STS
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# VS Code
+.vscode/
+
+### OS-specific files ###
+.DS_Store
+Thumbs.db
+
+### Logs ###
+*.log
+
+### Application Properties (if containing secrets) ###
+# Only ignore if your local file has credentials
+# Uncomment if needed
+# src/main/resources/application.properties
+
+### Local Database / Cache ###
+data/
