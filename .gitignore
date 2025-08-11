@@ -49,3 +49,5 @@ Thumbs.db
 
 ### Local Database / Cache ###
 data/
+
+src/main/resources/application.properties
